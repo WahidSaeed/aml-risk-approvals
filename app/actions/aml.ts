@@ -1,4 +1,4 @@
-'use server';
+//'use server';
 import API_BASE_URL from '../util/common';
 
 // 1. Fetch live queue via API Gateway HTTP GET
