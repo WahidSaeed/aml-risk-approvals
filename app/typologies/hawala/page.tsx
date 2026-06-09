@@ -1,6 +1,7 @@
 'use client';
 
 import CytoscapeComponent from 'react-cytoscapejs';
+import cytoscape from 'cytoscape';
 
 export default function HawalaSandbox() {
   const elements = [
@@ -17,7 +18,9 @@ export default function HawalaSandbox() {
     { data: { source: 'settle',   target: 'broker_b', label: 'Physical offset' } },
   ];
 
-  const stylesheet: cytoscape.Stylesheet[] = [
+  // FIXED: Adjusted interface assignment to cytoscape.StylesheetStyle[] 
+  // to clean up namespace checking constraints inside Turbopack compilers
+  const stylesheet: cytoscape.StylesheetStyle[] = [
     {
       selector: 'node',
       style: {
@@ -26,9 +29,9 @@ export default function HawalaSandbox() {
         'color': '#94a3b8',
         'font-size': '10px',
         'font-family': 'monospace',
-        'text-valign': 'bottom' as const,
+        'text-valign': 'bottom',
         'text-margin-y': 4,
-        'text-wrap': 'wrap' as const,
+        'text-wrap': 'wrap',
         'text-max-width': 90,
       }
     },
@@ -46,15 +49,15 @@ export default function HawalaSandbox() {
         'width': 2,
         'line-color': '#475569',
         'target-arrow-color': '#9333ea',
-        'target-arrow-shape': 'triangle' as const,
+        'target-arrow-shape': 'triangle',
         'label': 'data(label)',
         'font-size': '8px',
         'color': '#ffffff',
         'text-background-opacity': 1,
         'text-background-color': '#0f172a',
-        'text-wrap': 'wrap' as const,
+        'text-wrap': 'wrap',
         'text-max-width': 100,
-        'curve-style': 'bezier' as const,
+        'curve-style': 'bezier',
       }
     }
   ];
