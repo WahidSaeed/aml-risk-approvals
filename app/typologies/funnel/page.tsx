@@ -1,13 +1,14 @@
 'use client';
 
 import CytoscapeComponent from 'react-cytoscapejs';
+import cytoscape from 'cytoscape';
 
 export default function FunnelSandbox() {
   const elements = [
-    { data: { id: 'f1', label: 'Cash Biz A (DE)' },    position: { x: 60,  y: 60  } },
-    { data: { id: 'f2', label: 'Cash Biz B (PL)' },    position: { x: 60,  y: 160 } },
-    { data: { id: 'f3', label: 'Cash Biz C (RO)' },    position: { x: 60,  y: 260 } },
-    { data: { id: 'f4', label: 'Cash Biz D (HU)' },    position: { x: 60,  y: 360 } },
+    { data: { id: 'f1', label: 'Cash Biz A (DE)' },     position: { x: 60,  y: 60  } },
+    { data: { id: 'f2', label: 'Cash Biz B (PL)' },     position: { x: 60,  y: 160 } },
+    { data: { id: 'f3', label: 'Cash Biz C (RO)' },     position: { x: 60,  y: 260 } },
+    { data: { id: 'f4', label: 'Cash Biz D (HU)' },     position: { x: 60,  y: 360 } },
     { data: { id: 'agg', label: 'Aggregator Account' }, position: { x: 260, y: 210 } },
     { data: { id: 'out', label: 'Exit Wire (CH)' },     position: { x: 450, y: 210 } },
 
@@ -18,7 +19,9 @@ export default function FunnelSandbox() {
     { data: { source: 'agg', target: 'out', label: '€76,000' } },
   ];
 
-  const stylesheet: cytoscape.Stylesheet[] = [
+  // FIXED: Converted stylesheet interface array to cytoscape.StylesheetStyle[] 
+  // to avoid type collisions and compiler exit codes on Next.js deployment builds
+  const stylesheet: cytoscape.StylesheetStyle[] = [
     {
       selector: 'node[id ^= "f"]',
       style: {
@@ -27,7 +30,7 @@ export default function FunnelSandbox() {
         'color': '#94a3b8',
         'font-size': '10px',
         'font-family': 'monospace',
-        'text-valign': 'bottom' as const,
+        'text-valign': 'bottom',
         'text-margin-y': 4,
       }
     },
@@ -41,7 +44,7 @@ export default function FunnelSandbox() {
         'color': '#94a3b8',
         'font-size': '10px',
         'font-family': 'monospace',
-        'text-valign': 'bottom' as const,
+        'text-valign': 'bottom',
         'text-margin-y': 8,
       }
     },
@@ -53,7 +56,7 @@ export default function FunnelSandbox() {
         'color': '#94a3b8',
         'font-size': '10px',
         'font-family': 'monospace',
-        'text-valign': 'bottom' as const,
+        'text-valign': 'bottom',
         'text-margin-y': 4,
       }
     },
@@ -63,12 +66,13 @@ export default function FunnelSandbox() {
         'width': 2,
         'line-color': '#475569',
         'target-arrow-color': '#e11d48',
-        'target-arrow-shape': 'triangle' as const,
+        'target-arrow-shape': 'triangle',
         'label': 'data(label)',
         'font-size': '9px',
         'color': '#ffffff',
         'text-background-opacity': 1,
         'text-background-color': '#0f172a',
+        'curve-style': 'bezier', // Added for clean direction layout
       }
     }
   ];
