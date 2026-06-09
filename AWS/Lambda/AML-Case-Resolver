@@ -1,0 +1,59 @@
+import json
+import boto3
+import os
+
+sfn_client = boto3.client('stepfunctions')
+dynamodb = boto3.resource('dynamodb')
+
+def lambda_handler(event, context):
+    try:
+        # 1. Parse the incoming request body from API Gateway
+        body = json.loads(event.get('body', '{}'))
+        
+        transaction_id = body.get('transaction_id')
+        task_token = body.get('task_token')
+        human_decision = body.get('human_decision')
+        decision_note = body.get('decision_note')
+        
+        if not all([transaction_id, task_token, human_decision]):
+            return {
+                'statusCode': 400,
+                'body': json.dumps({'error': 'Missing required parameters.'})
+            }
+        
+        # 2. Update the status inside your Pending Reviews table
+        table = dynamodb.Table('AML-Pending-Reviews')
+        table.update_item(
+            Key={'TransactionID': transaction_id},
+            UpdateExpression="SET #stat = :s, Human_Decision = :d, Decision_Note = :n",
+            ExpressionAttributeNames={'#stat': 'Status'},
+            ExpressionAttributeValues={
+                ':s': 'RESOLVED',
+                ':d': human_decision,
+                ':n': decision_note
+            }
+        )
+        
+        # 3. Release the frozen Step Function using the Token
+        sfn_client.send_task_success(
+            taskToken=task_token,
+            output=json.dumps({
+                "status": "RESUMED"
+            })
+        )
+        
+        return {
+            'statusCode': 200,
+            'headers': {
+                'Access-Control-Allow-Origin': '*', # Allows Next.js to call it safely
+                'Content-Type': 'application/json'
+            },
+            'body': json.dumps({'message': f'Transaction {transaction_id} successfully resolved.'})
+        }
+        
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        return {
+            'statusCode': 500,
+            'body': json.dumps({'error': str(e)})
+        }
