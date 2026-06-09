@@ -1,6 +1,7 @@
 'use client';
 
 import CytoscapeComponent from 'react-cytoscapejs';
+import cytoscape from 'cytoscape';
 
 export default function TradeBasedSandbox() {
   const elements = [
@@ -17,7 +18,9 @@ export default function TradeBasedSandbox() {
     { data: { source: 'exporter',  target: 'final',    label: 'Laundered Delta: €380,000' } },
   ];
 
-  const stylesheet: cytoscape.Stylesheet[] = [
+  // FIXED: Changed type to cytoscape.StylesheetStyle[] 
+  // to avoid type collisions and compiler exit codes on Next.js deployment builds
+  const stylesheet: cytoscape.StylesheetStyle[] = [
     {
       selector: 'node',
       style: {
@@ -26,9 +29,9 @@ export default function TradeBasedSandbox() {
         'color': '#94a3b8',
         'font-size': '10px',
         'font-family': 'monospace',
-        'text-valign': 'bottom' as const,
+        'text-valign': 'bottom',
         'text-margin-y': 4,
-        'text-wrap': 'wrap' as const,
+        'text-wrap': 'wrap',
         'text-max-width': 90,
       }
     },
@@ -46,15 +49,15 @@ export default function TradeBasedSandbox() {
         'width': 2,
         'line-color': '#475569',
         'target-arrow-color': '#0d9488',
-        'target-arrow-shape': 'triangle' as const,
+        'target-arrow-shape': 'triangle',
         'label': 'data(label)',
         'font-size': '8px',
         'color': '#ffffff',
         'text-background-opacity': 1,
         'text-background-color': '#0f172a',
-        'text-wrap': 'wrap' as const,
+        'text-wrap': 'wrap',
         'text-max-width': 100,
-        'curve-style': 'bezier' as const,
+        'curve-style': 'bezier',
       }
     }
   ];
