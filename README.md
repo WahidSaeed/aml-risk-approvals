@@ -36,52 +36,50 @@ Traditional compliance pipelines face a hard tradeoff: human review processes un
 
 ---
 
-## 2. The SAML-D Dataset
+## 2. The IBM Transactions Dataset
 
-The system ingests and streams records from the **SAML-D (Synthetic AML Dataset)** — a purpose-built, fully-labelled transaction monitoring dataset published by Oztas et al. at the 2023 IEEE International Conference on e-Business Engineering.
+This file lists the approximately 5 million transactions in the small dataset with relatively higher illicit (HI) activity.
 
 ### At a Glance
 
 | Property | Value |
 |---|---|
-| **Total Transactions** | 9,504,852 |
-| **Features** | 12 |
-| **Typologies** | 28 (11 normal + 17 suspicious) |
-| **Suspicious Rate** | ~0.1039% (highly imbalanced) |
-| **Graph Structures** | 15 distinct network topologies |
-| **Source** | Kaggle / IEEE ICEBE 2023 |
-| **License** | For research & educational use |
+| **Total Transactions** | 5,047,406 (Small Sub-dataset Version) |
+| **Features** | 11 |
+| **Typologies** | Real-world multi-hop patterns (Fans, Cycles, Gatherings) |
+| **Suspicious Rate** | ~0.18% (Highly imbalanced / realistic anomaly distribution) |
+| **Graph Structures** | Complex relational patterns mapping across thousands of account nodes |
+| **Source** | Kaggle / IBM Metrics & Analytics Research |
+| **License** | Open Database License (ODbL) for research and educational use |
 
-### Dataset Schema — 12 Features
+### Dataset Schema — 11 Features
 
 | # | Feature | Type | Description |
 |---|---|---|---|
-| 1 | `Time` | Timestamp | Date and time of transaction — enables chronological ordering and velocity checks |
-| 2 | `Sender_account` | Categorical | Originating account identifier — used to build behavioral profiles |
-| 3 | `Receiver_account` | Categorical | Destination account identifier — key for graph-based hop detection |
-| 4 | `Amount` | Numeric | Transaction value — central signal for structuring and threshold breach |
-| 5 | `Payment_type` | Categorical | Mechanism: credit card, debit card, ACH, cash, cross-border transfer, cheque |
-| 6 | `Sender_bank_location` | Categorical | Country/region of the originating bank — flags high-risk jurisdictions |
-| 7 | `Receiver_bank_location` | Categorical | Country/region of the destination bank — detects cross-border anomalies |
-| 8 | `Payment_currency` | Categorical | Currency in which the payment was initiated |
-| 9 | `Receiver_currency` | Categorical | Currency received — mismatches signal potential structuring |
-| 10 | `Sender_age` | Numeric | Age of the sending account (account tenure proxy) |
-| 11 | `Receiver_age` | Numeric | Age of the receiving account |
-| 12 | `is_suspicious` | Binary | Ground-truth label: `1` = suspicious, `0` = normal |
+| 1 | `Timestamp` | Timestamp | Date and time of transaction — enables chronological ordering, sequencing, and velocity checks |
+| 2 | `From Bank` | Categorical | Unique routing identifier for the originating financial institution |
+| 3 | `Account` | Categorical | Originating account identifier — used to map sender baseline profiles |
+| 4 | `To Bank` | Categorical | Unique routing identifier for the beneficiary financial institution |
+| 5 | `Account.1` | Categorical | Destination account identifier — key for graph-based hop, path, and link detection |
+| 6 | `Amount Received` | Numeric | Net transaction value credited to the destination account |
+| 7 | `Receiving Currency` | Categorical | Currency in which the beneficiary settled the transaction |
+| 8 | `Amount Paid` | Numeric | Gross transaction value debited from the sender account — central signal for threshold breaches |
+| 9 | `Payment Currency` | Categorical | Currency in which the payment was initiated |
+| 10 | `Payment Format` | Categorical | Mechanism used: Wire Transfer, ACH, Credit Card, Debit Card, Cheque |
+| 11 | `Is Laundering` | Binary | Ground-truth label: `1` = Confirmed Laundering, `0` = Normal Transfer |
 
 ### High-Risk Signals in the Dataset
 
-The SAML-D dataset was designed in collaboration with AML specialists and captures real-world laundering patterns including:
+The IBM AML dataset captures structural financial behavior patterns engineered alongside compliance specialists, focusing on:
 
-- **Geographic risk** — sender/receiver bank locations include high-risk regions such as Mexico, Turkey, Morocco, and UAE
-- **Currency mismatch** — transactions where payment currency ≠ receiver currency indicate potential layering
-- **High-risk payment types** — cash and cross-border transfers are weighted more heavily in risk scoring
-- **Graph network structures** — 15 typology graphs model known laundering patterns such as fan-out, fan-in, cycle, and scatter-gather flows
+- **Structural Layering Tracks** — Tracks transactions where funds bounce between rapid inter-bank transfers (`From Bank` to `To Bank`) designed to hide the money trail.
+- **Payment Format Anomalies** — Identifies rapid, high-volume `Wire Transfers` and suspicious international patterns weighted heavily in risk scoring matrices.
+- **Smurfing / Structuring Indicators** — Tracks large sums fractured into multiple micro-amounts (`Amount Paid`) pushed sequentially to avoid traditional regulatory thresholds.
+- **Relational Graph Typologies** — Provides a foundation to map graph structures (Fan-in, Fan-out, and Circular Loops) across account nodes using the relational pairs of `Account` and `Account.1`.
 
-### Why SAML-D for This System
+### Why IBM HI-Small_Trans for This System
 
-Existing public AML datasets lack diversity, ground-truth labels, or sufficient typology coverage. SAML-D was purpose-built to address all three gaps, making it the right foundation for training and evaluating the `AML-Risk-Scorer` Lambda and the `Amazon Bedrock` risk narrative module.
-
+Many public transaction datasets isolate transactions into flat, individual rows. The IBM dataset maintains explicit relational identities between sender and receiver accounts over time, making it the perfect foundation for our sliding-window ingestion loop (`AML-S3-Stream-Ingestor`), our `AWS Step Functions` state tracking orchestrator, and the `Amazon Bedrock` real-time narrative report builder.
 ---
 
 ## 3. The HITL Architecture — Three Pillars
