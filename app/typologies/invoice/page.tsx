@@ -32,7 +32,7 @@ export default function TradeBasedSandbox() {
         'text-valign': 'bottom',
         'text-margin-y': 4,
         'text-wrap': 'wrap',
-        'text-max-width': 90,
+        'text-max-width': '90px',
       }
     },
     {
