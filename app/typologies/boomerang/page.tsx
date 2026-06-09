@@ -1,6 +1,7 @@
 'use client';
 
 import CytoscapeComponent from 'react-cytoscapejs';
+import cytoscape from 'cytoscape';
 
 export default function RoundTripSandbox() {
   const elements = [
@@ -8,43 +9,42 @@ export default function RoundTripSandbox() {
     { data: { id: 'b', label: 'Nominee BVI' },          position: { x: 430, y: 190 } },
     { data: { id: 'c', label: 'Cayman SPV' },           position: { x: 350, y: 340 } },
     { data: { id: 'd', label: 'Cyprus Holdco' },         position: { x: 150, y: 340 } },
-    { data: { id: 'e', label: 'Entity Alpha (UK)' },    position: { x: 70,  y: 190 } },
 
     { data: { source: 'a', target: 'b', label: 'Wire: €300,000' } },
     { data: { source: 'b', target: 'c', label: 'Loan: €295,000' } },
     { data: { source: 'c', target: 'd', label: 'Dividend: €290,000' } },
-    { data: { source: 'd', target: 'e', label: '"Investment": €285,000' } },
+    { data: { source: 'd', target: 'a', label: '"Investment": €285,000' } }, 
   ];
 
-  const nodeStyle = (color: string): cytoscape.StylesheetStyle['style'] => ({
+  const nodeStyle = (color: string): Record<string, string | number> => ({
     'background-color': color,
     'label': 'data(label)',
     'color': '#94a3b8',
     'font-size': '10px',
     'font-family': 'monospace',
-    'text-valign': 'bottom' as const,
+    'text-valign': 'bottom',
     'text-margin-y': 4,
   });
 
-  const stylesheet: cytoscape.Stylesheet[] = [
+  // FIXED: Changed type assignment to cytoscape.StylesheetStyle[] to resolve Turbopack build failure
+  const stylesheet: cytoscape.StylesheetStyle[] = [
     { selector: 'node[id = "a"]', style: nodeStyle('#a855f7') },
     { selector: 'node[id = "b"]', style: nodeStyle('#3b82f6') },
     { selector: 'node[id = "c"]', style: nodeStyle('#3b82f6') },
     { selector: 'node[id = "d"]', style: nodeStyle('#3b82f6') },
-    { selector: 'node[id = "e"]', style: nodeStyle('#a855f7') },
     {
       selector: 'edge',
       style: {
         'width': 2,
         'line-color': '#a855f7',
         'target-arrow-color': '#a855f7',
-        'target-arrow-shape': 'triangle' as const,
+        'target-arrow-shape': 'triangle',
         'label': 'data(label)',
         'font-size': '9px',
         'color': '#ffffff',
         'text-background-opacity': 1,
         'text-background-color': '#0f172a',
-        'curve-style': 'bezier' as const,
+        'curve-style': 'bezier',
       }
     }
   ];
