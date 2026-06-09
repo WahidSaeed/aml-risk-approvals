@@ -1,0 +1,1107 @@
+---
+# ============================================================
+#  AML Streaming Core Stack — Portable CloudFormation Template
+#  Refactored from account-specific generated template.
+#
+
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  AML Real-time WebSocket Transaction Streaming — portable stack.
+  Deploy into any AWS account/region without manual ARN edits.
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Parameters
+# ──────────────────────────────────────────────────────────────────────────────
+Parameters:
+
+  # ── Deployment Package References (one set per Lambda) ──────────────────
+  # AML-WebSocket-Stream-Trail
+  LambdaWebSocketStreamTrailS3Bucket:
+    Type: String
+    Description: S3 bucket containing the AML-WebSocket-Stream-Trail deployment package.
+  LambdaWebSocketStreamTrailS3Key:
+    Type: String
+    Description: S3 key of the AML-WebSocket-Stream-Trail deployment package.
+
+  # AML-S3-Stream-Ingestor
+  LambdaS3StreamIngestorS3Bucket:
+    Type: String
+    Description: S3 bucket containing the AML-S3-Stream-Ingestor deployment package.
+  LambdaS3StreamIngestorS3Key:
+    Type: String
+    Description: S3 key of the AML-S3-Stream-Ingestor deployment package.
+
+  # AML-Stream-Trigger
+  LambdaStreamTriggerS3Bucket:
+    Type: String
+    Description: S3 bucket containing the AML-Stream-Trigger deployment package.
+  LambdaStreamTriggerS3Key:
+    Type: String
+    Description: S3 key of the AML-Stream-Trigger deployment package.
+
+  # AML-Risk-Scorer
+  LambdaRiskScorerS3Bucket:
+    Type: String
+    Description: S3 bucket containing the AML-Risk-Scorer deployment package.
+  LambdaRiskScorerS3Key:
+    Type: String
+    Description: S3 key of the AML-Risk-Scorer deployment package.
+
+  # AML-Case-Resolver
+  LambdaCaseResolverS3Bucket:
+    Type: String
+    Description: S3 bucket containing the AML-Case-Resolver deployment package.
+  LambdaCaseResolverS3Key:
+    Type: String
+    Description: S3 key of the AML-Case-Resolver deployment package.
+
+  # AML-Get-Pending-Cases
+  LambdaGetPendingCasesS3Bucket:
+    Type: String
+    Description: S3 bucket containing the AML-Get-Pending-Cases deployment package.
+  LambdaGetPendingCasesS3Key:
+    Type: String
+    Description: S3 key of the AML-Get-Pending-Cases deployment package.
+
+  # AML-Fetch-Graph-Topology
+  LambdaFetchGraphTopologyS3Bucket:
+    Type: String
+    Description: S3 bucket containing the AML-Fetch-Graph-Topology deployment package.
+  LambdaFetchGraphTopologyS3Key:
+    Type: String
+    Description: S3 key of the AML-Fetch-Graph-Topology deployment package.
+
+  # ── Operational Parameters ───────────────────────────────────────────────
+  AlertEmail:
+    Type: String
+    Description: Email address that receives AML review alert notifications.
+    Default: "alerts@example.com"
+
+  BedrockModelId:
+    Type: String
+    Description: >
+      Bedrock foundation model ID used by the Risk Scorer.
+      Must be available in the target region.
+    Default: "qwen.qwen3-coder-30b-a3b-v1:0"
+
+  WebSocketApiId:
+    Type: String
+    Description: >
+      API Gateway WebSocket API ID (e.g. 0frgyfwbg2).
+      Required for Lambda invoke permissions on $connect/$disconnect/startTrace.
+
+  RestApiId:
+    Type: String
+    Description: >
+      API Gateway REST API ID (e.g. mr2qqnyn8a).
+      Required for Lambda invoke permissions on /cases and /resolve routes.
+
+  EnvironmentName:
+    Type: String
+    Default: "prod"
+    AllowedValues: ["dev", "staging", "prod"]
+    Description: Logical environment tag applied to all resources.
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Resources
+# ──────────────────────────────────────────────────────────────────────────────
+Resources:
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # S3 — Raw Ingestion Pool
+  # ════════════════════════════════════════════════════════════════════════════
+  S3BucketAmlRawIngestionPool:
+    UpdateReplacePolicy: Retain
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Sub "aml-raw-ingestion-pool-${AWS::AccountId}-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        RestrictPublicBuckets: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        BlockPublicAcls: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - BucketKeyEnabled: false
+            ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      Tags:
+        - Key: EnvironmentName
+          Value: !Ref EnvironmentName
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # DynamoDB Tables
+  # ════════════════════════════════════════════════════════════════════════════
+  DynamoDBTableTransactionsLedger:
+    UpdateReplacePolicy: Retain
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    Properties:
+      TableName: "Transactions-Ledger"
+      BillingMode: PAY_PER_REQUEST
+      StreamSpecification:
+        StreamViewType: NEW_IMAGE
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: false
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: false
+      DeletionProtectionEnabled: false
+      TableClass: STANDARD
+      TimeToLiveSpecification:
+        Enabled: false
+      Tags:
+        - Key: EnvironmentName
+          Value: !Ref EnvironmentName
+
+  DynamoDBTableAMLPendingReviews:
+    UpdateReplacePolicy: Retain
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    Properties:
+      TableName: "AML-Pending-Reviews"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: TransactionID
+          AttributeType: S
+      KeySchema:
+        - AttributeName: TransactionID
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: false
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: false
+      DeletionProtectionEnabled: false
+      TableClass: STANDARD
+      TimeToLiveSpecification:
+        Enabled: false
+      Tags:
+        - Key: EnvironmentName
+          Value: !Ref EnvironmentName
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # SNS
+  # ════════════════════════════════════════════════════════════════════════════
+  SNSTopicAMLReviewAlerts:
+    UpdateReplacePolicy: Retain
+    Type: AWS::SNS::Topic
+    DeletionPolicy: Retain
+    Properties:
+      TopicName: "AML-Review-Alerts"
+      FifoTopic: false
+      TracingConfig: PassThrough
+      Subscription:
+        - Endpoint: !Ref AlertEmail
+          Protocol: email
+      Tags:
+        - Key: EnvironmentName
+          Value: !Ref EnvironmentName
+
+  SNSSubscriptionAMLReviewAlerts:
+    UpdateReplacePolicy: Retain
+    Type: AWS::SNS::Subscription
+    DeletionPolicy: Retain
+    Properties:
+      TopicArn: !Ref SNSTopicAMLReviewAlerts
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+      RawMessageDelivery: false
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # CloudWatch Log Groups
+  # ════════════════════════════════════════════════════════════════════════════
+  LogGroupWebSocketStreamTrail:
+    UpdateReplacePolicy: Retain
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName: "/aws/lambda/AML-WebSocket-Stream-Trail"
+      LogGroupClass: STANDARD
+      BearerTokenAuthenticationEnabled: false
+      DeletionProtectionEnabled: false
+
+  LogGroupS3StreamIngestor:
+    UpdateReplacePolicy: Retain
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName: "/aws/lambda/AML-S3-Stream-Ingestor"
+      LogGroupClass: STANDARD
+      BearerTokenAuthenticationEnabled: false
+      DeletionProtectionEnabled: false
+
+  LogGroupStreamTrigger:
+    UpdateReplacePolicy: Retain
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName: "/aws/lambda/AML-Stream-Trigger"
+      LogGroupClass: STANDARD
+      BearerTokenAuthenticationEnabled: false
+      DeletionProtectionEnabled: false
+
+  LogGroupRiskScorer:
+    UpdateReplacePolicy: Retain
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName: "/aws/lambda/AML-Risk-Scorer"
+      LogGroupClass: STANDARD
+      BearerTokenAuthenticationEnabled: false
+      DeletionProtectionEnabled: false
+
+  LogGroupCaseResolver:
+    UpdateReplacePolicy: Retain
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName: "/aws/lambda/AML-Case-Resolver"
+      LogGroupClass: STANDARD
+      BearerTokenAuthenticationEnabled: false
+      DeletionProtectionEnabled: false
+
+  LogGroupGetPendingCases:
+    UpdateReplacePolicy: Retain
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName: "/aws/lambda/AML-Get-Pending-Cases"
+      LogGroupClass: STANDARD
+      BearerTokenAuthenticationEnabled: false
+      DeletionProtectionEnabled: false
+
+  LogGroupFetchGraphTopology:
+    UpdateReplacePolicy: Retain
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName: "/aws/lambda/AML-Fetch-Graph-Topology"
+      LogGroupClass: STANDARD
+      BearerTokenAuthenticationEnabled: false
+      DeletionProtectionEnabled: false
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # IAM — Shared managed policies (inline, no account-ID references)
+  # ════════════════════════════════════════════════════════════════════════════
+
+  # Basic Lambda execution policy (reusable across Lambda roles)
+  ManagedPolicyLambdaBasicExecution:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "AML-LambdaBasicExecution-${AWS::StackName}"
+      Description: "Basic CloudWatch Logs permissions for Lambda functions."
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*"
+
+  # Risk Scorer — Bedrock invoke permission
+  ManagedPolicyRiskScorerBedrock:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "AML-RiskScorer-BedrockInvoke-${AWS::StackName}"
+      Description: "Allow AML Risk Scorer to invoke the configured Bedrock foundation model."
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: BedrockInvoke
+            Effect: Allow
+            Action:
+              - bedrock:InvokeModel
+            Resource: !Sub "arn:aws:bedrock:${AWS::Region}::foundation-model/${BedrockModelId}"
+
+  # S3 Stream Ingestor — read from raw ingestion pool
+  ManagedPolicyS3StreamIngestorS3:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "AML-S3StreamIngestor-S3Access-${AWS::StackName}"
+      Description: "Allow AML S3 Stream Ingestor to read from the raw ingestion S3 bucket."
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: S3ReadIngest
+            Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:ListBucket
+            Resource:
+              - !GetAtt S3BucketAmlRawIngestionPool.Arn
+              - !Sub "${S3BucketAmlRawIngestionPool.Arn}/*"
+
+  # WebSocket Stream Trail — API Gateway ManageConnections
+  ManagedPolicyWebSocketManageConnections:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "AML-WebSocket-ManageConnections-${AWS::StackName}"
+      Description: "Allow WebSocket Stream Trail Lambda to post messages back to API Gateway connections."
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ManageConnections
+            Effect: Allow
+            Action:
+              - execute-api:ManageConnections
+            Resource: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApiId}/*"
+
+  # StepFunctions — invoke Lambda
+  ManagedPolicyStepFunctionsLambdaInvoke:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "AML-StepFunctions-LambdaInvoke-${AWS::StackName}"
+      Description: "Allow Step Functions AML-Risk-Escalator to invoke the Risk Scorer Lambda."
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: lambda:InvokeFunction
+            Resource:
+              - !GetAtt LambdaFunctionAMLRiskScorer.Arn
+              - !Sub "${LambdaFunctionAMLRiskScorer.Arn}:*"
+
+  # StepFunctions — publish to SNS
+  ManagedPolicyStepFunctionsSNSPublish:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "AML-StepFunctions-SNSPublish-${AWS::StackName}"
+      Description: "Allow Step Functions AML-Risk-Escalator to publish to the AML-Review-Alerts SNS topic."
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: sns:Publish
+            Resource: !Ref SNSTopicAMLReviewAlerts
+
+  # StepFunctions — DynamoDB access (Pending Reviews table)
+  ManagedPolicyStepFunctionsDynamoDB:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "AML-StepFunctions-DynamoDB-${AWS::StackName}"
+      Description: "Allow Step Functions AML-Risk-Escalator to read/write the AML-Pending-Reviews DynamoDB table."
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - dynamodb:GetItem
+              - dynamodb:PutItem
+              - dynamodb:UpdateItem
+              - dynamodb:DeleteItem
+            Resource: !GetAtt DynamoDBTableAMLPendingReviews.Arn
+
+  # StepFunctions — X-Ray
+  ManagedPolicyStepFunctionsXRay:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "AML-StepFunctions-XRay-${AWS::StackName}"
+      Description: "Allow Step Functions to call X-Ray daemon."
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - xray:PutTraceSegments
+              - xray:PutTelemetryRecords
+              - xray:GetSamplingRules
+              - xray:GetSamplingTargets
+            Resource: "*"
+
+  # EventBridge Scheduler — invoke Lambda
+  ManagedPolicyEventBridgeSchedulerLambda:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "AML-EventBridgeScheduler-Lambda-${AWS::StackName}"
+      Description: "Allow EventBridge Scheduler to invoke Lambda functions in this stack."
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: lambda:InvokeFunction
+            Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:AML-*"
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # IAM — Lambda execution roles
+  # ════════════════════════════════════════════════════════════════════════════
+
+  IAMRoleWebSocketStreamTrail:
+    UpdateReplacePolicy: Retain
+    Type: AWS::IAM::Role
+    DeletionPolicy: Retain
+    Properties:
+      RoleName: !Sub "AML-WebSocket-Stream-Trail-role-${AWS::StackName}"
+      Path: "/service-role/"
+      ManagedPolicyArns:
+        - !Ref ManagedPolicyLambdaBasicExecution
+        - !Ref ManagedPolicyWebSocketManageConnections
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+
+  IAMRoleS3StreamIngestor:
+    UpdateReplacePolicy: Retain
+    Type: AWS::IAM::Role
+    DeletionPolicy: Retain
+    Properties:
+      RoleName: !Sub "AML-S3-Stream-Ingestor-role-${AWS::StackName}"
+      Path: "/service-role/"
+      ManagedPolicyArns:
+        - !Ref ManagedPolicyLambdaBasicExecution
+        - !Ref ManagedPolicyS3StreamIngestorS3
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+
+  IAMRoleStreamTrigger:
+    UpdateReplacePolicy: Retain
+    Type: AWS::IAM::Role
+    DeletionPolicy: Retain
+    Properties:
+      RoleName: !Sub "AML-Stream-Trigger-role-${AWS::StackName}"
+      Path: "/service-role/"
+      ManagedPolicyArns:
+        - !Ref ManagedPolicyLambdaBasicExecution
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+
+  IAMRoleRiskScorer:
+    UpdateReplacePolicy: Retain
+    Type: AWS::IAM::Role
+    DeletionPolicy: Retain
+    Properties:
+      RoleName: !Sub "AML-Risk-Scorer-role-${AWS::StackName}"
+      Path: "/"
+      ManagedPolicyArns:
+        - !Ref ManagedPolicyLambdaBasicExecution
+        - !Ref ManagedPolicyRiskScorerBedrock
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      MaxSessionDuration: 3600
+      Description: ""
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+
+  IAMRoleCaseResolver:
+    UpdateReplacePolicy: Retain
+    Type: AWS::IAM::Role
+    DeletionPolicy: Retain
+    Properties:
+      RoleName: !Sub "AML-Case-Resolver-role-${AWS::StackName}"
+      Path: "/service-role/"
+      ManagedPolicyArns:
+        - !Ref ManagedPolicyLambdaBasicExecution
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+
+  IAMRoleGetPendingCases:
+    UpdateReplacePolicy: Retain
+    Type: AWS::IAM::Role
+    DeletionPolicy: Retain
+    Properties:
+      RoleName: !Sub "AML-Get-Pending-Cases-role-${AWS::StackName}"
+      Path: "/service-role/"
+      ManagedPolicyArns:
+        - !Ref ManagedPolicyLambdaBasicExecution
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+
+  IAMRoleFetchGraphTopology:
+    UpdateReplacePolicy: Retain
+    Type: AWS::IAM::Role
+    DeletionPolicy: Retain
+    Properties:
+      RoleName: !Sub "AML-Fetch-Graph-Topology-role-${AWS::StackName}"
+      Path: "/service-role/"
+      ManagedPolicyArns:
+        - !Ref ManagedPolicyLambdaBasicExecution
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+
+  # ── StepFunctions execution role ────────────────────────────────────────────
+  IAMRoleStepFunctionsAMLRiskEscalator:
+    UpdateReplacePolicy: Retain
+    Type: AWS::IAM::Role
+    DeletionPolicy: Retain
+    Properties:
+      RoleName: !Sub "StepFunctions-AML-Risk-Escalator-role-${AWS::StackName}"
+      Path: "/service-role/"
+      ManagedPolicyArns:
+        - !Ref ManagedPolicyStepFunctionsLambdaInvoke
+        - !Ref ManagedPolicyStepFunctionsXRay
+        - !Ref ManagedPolicyStepFunctionsSNSPublish
+        - !Ref ManagedPolicyStepFunctionsDynamoDB
+      MaxSessionDuration: 3600
+      Policies:
+        - PolicyName: AML-Risk-Escalator-Audit-Logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: VisualEditor0
+                Effect: Allow
+                Action: dynamodb:PutItem
+                Resource: !GetAtt DynamoDBTableAMLPendingReviews.Arn
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+
+  # ── EventBridge Scheduler execution role ─────────────────────────────────
+  IAMRoleEventBridgeSchedulerLambda:
+    UpdateReplacePolicy: Retain
+    Type: AWS::IAM::Role
+    DeletionPolicy: Retain
+    Properties:
+      RoleName: !Sub "Amazon_EventBridge_Scheduler_LAMBDA_${AWS::StackName}"
+      Path: "/service-role/"
+      ManagedPolicyArns:
+        - !Ref ManagedPolicyEventBridgeSchedulerLambda
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+            Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # Lambda Functions
+  # ════════════════════════════════════════════════════════════════════════════
+
+  LambdaFunctionAMLWebSocketStreamTrail:
+    UpdateReplacePolicy: Retain
+    Type: AWS::Lambda::Function
+    DeletionPolicy: Retain
+    DependsOn: LogGroupWebSocketStreamTrail
+    Properties:
+      FunctionName: "AML-WebSocket-Stream-Trail"
+      Runtime: python3.14
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt IAMRoleWebSocketStreamTrail.Arn
+      MemorySize: 128
+      Timeout: 120    # 2 minutes (matches "2 min" in diagram)
+      PackageType: Zip
+      Code:
+        S3Bucket: !Ref LambdaWebSocketStreamTrailS3Bucket
+        S3Key: !Ref LambdaWebSocketStreamTrailS3Key
+      TracingConfig:
+        Mode: PassThrough
+      RuntimeManagementConfig:
+        UpdateRuntimeOn: Auto
+      LoggingConfig:
+        LogFormat: Text
+        LogGroup: "/aws/lambda/AML-WebSocket-Stream-Trail"
+      RecursiveLoop: Terminate
+      EphemeralStorage:
+        Size: 512
+      Architectures:
+        - x86_64
+
+  LambdaFunctionAMLS3StreamIngestor:
+    UpdateReplacePolicy: Retain
+    Type: AWS::Lambda::Function
+    DeletionPolicy: Retain
+    DependsOn: LogGroupS3StreamIngestor
+    Properties:
+      FunctionName: "AML-S3-Stream-Ingestor"
+      Runtime: python3.14
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt IAMRoleS3StreamIngestor.Arn
+      MemorySize: 128
+      Timeout: 60
+      PackageType: Zip
+      Code:
+        S3Bucket: !Ref LambdaS3StreamIngestorS3Bucket
+        S3Key: !Ref LambdaS3StreamIngestorS3Key
+      TracingConfig:
+        Mode: PassThrough
+      RuntimeManagementConfig:
+        UpdateRuntimeOn: Auto
+      LoggingConfig:
+        LogFormat: Text
+        LogGroup: "/aws/lambda/AML-S3-Stream-Ingestor"
+      RecursiveLoop: Terminate
+      EphemeralStorage:
+        Size: 512
+      Architectures:
+        - x86_64
+
+  LambdaFunctionAMLStreamTrigger:
+    UpdateReplacePolicy: Retain
+    Type: AWS::Lambda::Function
+    DeletionPolicy: Retain
+    DependsOn: LogGroupStreamTrigger
+    Properties:
+      FunctionName: "AML-Stream-Trigger"
+      Runtime: python3.14
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt IAMRoleStreamTrigger.Arn
+      MemorySize: 128
+      Timeout: 3
+      PackageType: Zip
+      Code:
+        S3Bucket: !Ref LambdaStreamTriggerS3Bucket
+        S3Key: !Ref LambdaStreamTriggerS3Key
+      TracingConfig:
+        Mode: PassThrough
+      RuntimeManagementConfig:
+        UpdateRuntimeOn: Auto
+      LoggingConfig:
+        LogFormat: Text
+        LogGroup: "/aws/lambda/AML-Stream-Trigger"
+      RecursiveLoop: Terminate
+      EphemeralStorage:
+        Size: 512
+      Architectures:
+        - x86_64
+
+  LambdaFunctionAMLRiskScorer:
+    UpdateReplacePolicy: Retain
+    Type: AWS::Lambda::Function
+    DeletionPolicy: Retain
+    DependsOn: LogGroupRiskScorer
+    Properties:
+      FunctionName: "AML-Risk-Scorer"
+      Runtime: python3.14
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt IAMRoleRiskScorer.Arn
+      MemorySize: 128
+      Timeout: 3
+      PackageType: Zip
+      Code:
+        S3Bucket: !Ref LambdaRiskScorerS3Bucket
+        S3Key: !Ref LambdaRiskScorerS3Key
+      TracingConfig:
+        Mode: PassThrough
+      RuntimeManagementConfig:
+        UpdateRuntimeOn: Auto
+      LoggingConfig:
+        LogFormat: Text
+        LogGroup: "/aws/lambda/AML-Risk-Scorer"
+      RecursiveLoop: Terminate
+      EphemeralStorage:
+        Size: 512
+      Architectures:
+        - x86_64
+
+  LambdaFunctionAMLCaseResolver:
+    UpdateReplacePolicy: Retain
+    Type: AWS::Lambda::Function
+    DeletionPolicy: Retain
+    DependsOn: LogGroupCaseResolver
+    Properties:
+      FunctionName: "AML-Case-Resolver"
+      Runtime: python3.14
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt IAMRoleCaseResolver.Arn
+      MemorySize: 128
+      Timeout: 3
+      PackageType: Zip
+      Code:
+        S3Bucket: !Ref LambdaCaseResolverS3Bucket
+        S3Key: !Ref LambdaCaseResolverS3Key
+      TracingConfig:
+        Mode: PassThrough
+      RuntimeManagementConfig:
+        UpdateRuntimeOn: Auto
+      LoggingConfig:
+        LogFormat: Text
+        LogGroup: "/aws/lambda/AML-Case-Resolver"
+      RecursiveLoop: Terminate
+      EphemeralStorage:
+        Size: 512
+      Architectures:
+        - x86_64
+
+  LambdaFunctionAMLGetPendingCases:
+    UpdateReplacePolicy: Retain
+    Type: AWS::Lambda::Function
+    DeletionPolicy: Retain
+    DependsOn: LogGroupGetPendingCases
+    Properties:
+      FunctionName: "AML-Get-Pending-Cases"
+      Runtime: python3.14
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt IAMRoleGetPendingCases.Arn
+      MemorySize: 128
+      Timeout: 3
+      PackageType: Zip
+      Code:
+        S3Bucket: !Ref LambdaGetPendingCasesS3Bucket
+        S3Key: !Ref LambdaGetPendingCasesS3Key
+      TracingConfig:
+        Mode: PassThrough
+      RuntimeManagementConfig:
+        UpdateRuntimeOn: Auto
+      LoggingConfig:
+        LogFormat: Text
+        LogGroup: "/aws/lambda/AML-Get-Pending-Cases"
+      RecursiveLoop: Terminate
+      EphemeralStorage:
+        Size: 512
+      Architectures:
+        - x86_64
+
+  LambdaFunctionAMLFetchGraphTopology:
+    UpdateReplacePolicy: Retain
+    Type: AWS::Lambda::Function
+    DeletionPolicy: Retain
+    DependsOn: LogGroupFetchGraphTopology
+    Properties:
+      FunctionName: "AML-Fetch-Graph-Topology"
+      Runtime: python3.14
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt IAMRoleFetchGraphTopology.Arn
+      MemorySize: 128
+      Timeout: 30
+      PackageType: Zip
+      Code:
+        S3Bucket: !Ref LambdaFetchGraphTopologyS3Bucket
+        S3Key: !Ref LambdaFetchGraphTopologyS3Key
+      TracingConfig:
+        Mode: PassThrough
+      RuntimeManagementConfig:
+        UpdateRuntimeOn: Auto
+      LoggingConfig:
+        LogFormat: Text
+        LogGroup: "/aws/lambda/AML-Fetch-Graph-Topology"
+      RecursiveLoop: Terminate
+      EphemeralStorage:
+        Size: 512
+      Tags:
+        - Key: EnvironmentName
+          Value: !Ref EnvironmentName
+      Architectures:
+        - x86_64
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # Lambda Permissions (API Gateway → Lambda invoke)
+  # ════════════════════════════════════════════════════════════════════════════
+
+  LambdaPermissionWebSocketConnect:
+    UpdateReplacePolicy: Retain
+    Type: AWS::Lambda::Permission
+    DeletionPolicy: Retain
+    Properties:
+      FunctionName: !GetAtt LambdaFunctionAMLWebSocketStreamTrail.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApiId}/*/$connect"
+
+  LambdaPermissionWebSocketDisconnect:
+    UpdateReplacePolicy: Retain
+    Type: AWS::Lambda::Permission
+    DeletionPolicy: Retain
+    Properties:
+      FunctionName: !GetAtt LambdaFunctionAMLWebSocketStreamTrail.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApiId}/*/\$disconnect"
+
+  LambdaPermissionWebSocketStartTrace:
+    UpdateReplacePolicy: Retain
+    Type: AWS::Lambda::Permission
+    DeletionPolicy: Retain
+    Properties:
+      FunctionName: !GetAtt LambdaFunctionAMLWebSocketStreamTrail.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApiId}/*/startTrace"
+
+  LambdaPermissionGetPendingCases:
+    UpdateReplacePolicy: Retain
+    Type: AWS::Lambda::Permission
+    DeletionPolicy: Retain
+    Properties:
+      FunctionName: !GetAtt LambdaFunctionAMLGetPendingCases.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RestApiId}/*/*/cases"
+
+  LambdaPermissionCaseResolver:
+    UpdateReplacePolicy: Retain
+    Type: AWS::Lambda::Permission
+    DeletionPolicy: Retain
+    Properties:
+      FunctionName: !GetAtt LambdaFunctionAMLCaseResolver.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RestApiId}/*/*/resolve"
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # Step Functions — AML Risk Escalator
+  # ════════════════════════════════════════════════════════════════════════════
+  StepFunctionsStateMachineAMLRiskEscalator:
+    UpdateReplacePolicy: Retain
+    Type: AWS::StepFunctions::StateMachine
+    DeletionPolicy: Retain
+    Properties:
+      StateMachineName: "AML-Risk-Escalator"
+      StateMachineType: STANDARD
+      RoleArn: !GetAtt IAMRoleStepFunctionsAMLRiskEscalator.Arn
+      EncryptionConfiguration:
+        Type: AWS_OWNED_KEY
+      LoggingConfiguration:
+        IncludeExecutionData: false
+        Level: "OFF"
+      TracingConfiguration:
+        Enabled: false
+      # All ARNs reference stack resources via !Sub / Fn::Sub
+      DefinitionSubstitutions:
+        RiskScorerArn: !GetAtt LambdaFunctionAMLRiskScorer.Arn
+        SNSTopicArn: !Ref SNSTopicAMLReviewAlerts
+        PendingReviewsTable: !Ref DynamoDBTableAMLPendingReviews
+      Definition:
+        StartAt: "Call Risk Scorer"
+        States:
+          "Call Risk Scorer":
+            Type: Task
+            Resource: "arn:aws:states:::lambda:invoke"
+            Parameters:
+              FunctionName.$: "States.Format('{}', '${RiskScorerArn}')"
+              Payload:
+                "transaction.$": "$.transaction"
+            Next: "Evaluate Risk"
+            ResultPath: "$.lambda_output"
+          "Evaluate Risk":
+            Type: Choice
+            Choices:
+              - Variable: "$.lambda_output.Payload.risk_score"
+                NumericGreaterThanEquals: 0.5
+                Next: "Notify Escalation via SNS"
+            Default: "Transaction Completed"
+          "Notify Escalation via SNS":
+            Type: Task
+            Resource: "arn:aws:states:::sns:publish"
+            Parameters:
+              TopicArn: "${SNSTopicArn}"
+              "Message.$": "States.JsonToString(States.Format('CRITICAL: Transaction {} requires manual compliance review. Check the Next.js dashboard.', $.transaction.id))"
+            ResultPath: null
+            Next: "Save Escalation and Pause"
+          "Save Escalation and Pause":
+            Type: Task
+            Resource: "arn:aws:states:::aws-sdk:dynamodb:putItem.waitForTaskToken"
+            Parameters:
+              TableName: "${PendingReviewsTable}"
+              Item:
+                TransactionID:
+                  "S.$": "$.transaction.id"
+                Amount:
+                  "N.$": "States.Format('{}', $.transaction.amount)"
+                Currency:
+                  "S.$": "$.transaction.currency"
+                OriginCountry:
+                  "S.$": "$.transaction.origin_country"
+                DestCountry:
+                  "S.$": "$.transaction.dest_country"
+                RiskScore:
+                  "N.$": "States.Format('{}', $.lambda_output.Payload.risk_score)"
+                Reasoning:
+                  "S.$": "$.lambda_output.Payload.reasoning"
+                Status:
+                  S: "PENDING_HUMAN_REVIEW"
+                TaskToken:
+                  "S.$": "$$.Task.Token"
+            ResultPath: "$.human_review_result"
+            Next: "Notify Resolution via SNS"
+          "Notify Resolution via SNS":
+            Type: Task
+            Resource: "arn:aws:states:::sns:publish"
+            Parameters:
+              TopicArn: "${SNSTopicArn}"
+              "Message.$": "States.JsonToString(States.Format('RESOLVED: Case for Transaction {} has been closed.', $.transaction.id))"
+            Next: "Transaction Completed"
+          "Transaction Completed":
+            Type: Pass
+            Result: "Transaction Cleared"
+            End: true
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # RAM Permissions (Lake Formation / Glue sharing — account-agnostic)
+  # ════════════════════════════════════════════════════════════════════════════
+
+  RAMPermissionGlueDatabaseReadWriteForTable:
+    UpdateReplacePolicy: Retain
+    Type: AWS::RAM::Permission
+    DeletionPolicy: Retain
+    Properties:
+      Name: "AWSRAMLFEnabledGlueDatabaseReadWriteForTable"
+      ResourceType: "glue:Table"
+      PolicyTemplate:
+        Condition:
+          StringEquals:
+            "glue:LakeFormationPermissions": "Enabled"
+        Action:
+          - glue:GetTable
+          - glue:UpdateTable
+          - glue:DeleteTable
+          - glue:BatchDeleteTable
+          - glue:BatchDeleteTableVersion
+          - glue:GetTableVersion
+          - glue:GetTableVersions
+          - glue:GetPartition
+          - glue:GetPartitions
+          - glue:BatchGetPartition
+          - glue:BatchCreatePartition
+          - glue:CreatePartition
+          - glue:UpdatePartition
+          - glue:BatchDeletePartition
+          - glue:DeletePartition
+          - glue:GetTables
+          - glue:SearchTables
+          - glue:CreateTable
+          - glue:DeleteDatabase
+          - glue:BatchUpdatePartition
+          - glue:DeleteTableVersion
+        Effect: Allow
+
+  RAMPermissionGlueAllTablesReadWriteForDatabase:
+    UpdateReplacePolicy: Retain
+    Type: AWS::RAM::Permission
+    DeletionPolicy: Retain
+    Properties:
+      Name: "AWSRAMLFEnabledGlueAllTablesReadWriteForDatabase"
+      ResourceType: "glue:Database"
+      PolicyTemplate:
+        Condition:
+          StringEquals:
+            "glue:LakeFormationPermissions": "Enabled"
+        Action:
+          - glue:GetTable
+          - glue:UpdateTable
+          - glue:DeleteTable
+          - glue:BatchDeleteTable
+          - glue:BatchDeleteTableVersion
+          - glue:GetTableVersion
+          - glue:GetTableVersions
+          - glue:GetPartition
+          - glue:GetPartitions
+          - glue:BatchGetPartition
+          - glue:BatchCreatePartition
+          - glue:CreatePartition
+          - glue:UpdatePartition
+          - glue:BatchDeletePartition
+          - glue:DeletePartition
+          - glue:GetTables
+          - glue:GetDatabase
+          - glue:GetDatabases
+          - glue:SearchTables
+          - glue:BatchUpdatePartition
+          - glue:DeleteTableVersion
+          - glue:GetUserDefinedFunctions
+        Effect: Allow
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Outputs
+# ──────────────────────────────────────────────────────────────────────────────
+Outputs:
+
+  S3BucketName:
+    Description: "Name of the AML raw ingestion S3 bucket (account+region scoped)"
+    Value: !Ref S3BucketAmlRawIngestionPool
+    Export:
+      Name: !Sub "${AWS::StackName}-S3BucketName"
+
+  S3BucketArn:
+    Description: "ARN of the AML raw ingestion S3 bucket"
+    Value: !GetAtt S3BucketAmlRawIngestionPool.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-S3BucketArn"
+
+  TransactionsLedgerTableArn:
+    Description: "ARN of the Transactions-Ledger DynamoDB table"
+    Value: !GetAtt DynamoDBTableTransactionsLedger.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-TransactionsLedgerArn"
+
+  PendingReviewsTableArn:
+    Description: "ARN of the AML-Pending-Reviews DynamoDB table"
+    Value: !GetAtt DynamoDBTableAMLPendingReviews.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-PendingReviewsArn"
+
+  SNSTopicArn:
+    Description: "ARN of the AML-Review-Alerts SNS topic"
+    Value: !Ref SNSTopicAMLReviewAlerts
+    Export:
+      Name: !Sub "${AWS::StackName}-SNSTopicArn"
+
+  StateMachineArn:
+    Description: "ARN of the AML-Risk-Escalator Step Functions state machine"
+    Value: !Ref StepFunctionsStateMachineAMLRiskEscalator
+    Export:
+      Name: !Sub "${AWS::StackName}-StateMachineArn"
+
+  WebSocketStreamTrailFunctionArn:
+    Description: "ARN of the AML-WebSocket-Stream-Trail Lambda"
+    Value: !GetAtt LambdaFunctionAMLWebSocketStreamTrail.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-WebSocketStreamTrailArn"
+
+  RiskScorerFunctionArn:
+    Description: "ARN of the AML-Risk-Scorer Lambda"
+    Value: !GetAtt LambdaFunctionAMLRiskScorer.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-RiskScorerArn"
